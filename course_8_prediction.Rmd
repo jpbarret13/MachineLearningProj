@@ -1,0 +1,142 @@
+---
+title: "Prediction of Correct/Incorrect Biceps Curl Form"
+author: "Justin Barrett"
+date: "7/21/2018"
+output: html_document
+---
+
+The following packages were used during this project.
+      *-* dplyr
+      *-* caret
+      *-* RANN
+      *-* randomForest
+      *-* cowplot
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(caret)
+library(RANN)
+library(randomForest)
+library(cowplot)
+```
+
+
+## Abstract
+
+This report details the steps taken in order to come up with a valid prediction method for the class of exercise being done using the dataset found at the following website: http://groupware.les.inf.puc-rio.br/har . Participants were asked to do a bicep curl with a dumbbell in 5 different ways: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). The data was downloaded and a prediction method was found that could predict up to 93% of the out of sample data.
+
+## Procedure
+
+The procedure for obtaining this prediction model will now be explained. First, the seed was set and then the data was read into R. Next, "train" data was split into a training set and a test set. The training set was further split into the actual training set as well as a validation set.
+```{r}
+set.seed(12345)
+data_train <- read.csv("pml-training.csv", header = TRUE)
+data_test <- read.csv("pml-testing.csv", header = TRUE)
+
+# Split into test and training sets
+inTrain <- createDataPartition(y = data_train$classe, p = 0.8, list = FALSE)
+training <- data_train[inTrain,]
+testing <- data_train[-inTrain,]
+
+# Split Training set into training and validation set
+inTrain2 <- createDataPartition(y = training$classe, p = 0.75, list = FALSE)
+training1 <- training[inTrain2,]
+validation <- training[-inTrain2,]
+```
+
+Next, variables that were not beneficial or had bad data were removed from the dataset. Then, all variables were transformed into numeric data so that a PCA could be performed.
+
+```{r, message=FALSE, warning=FALSE}
+training_a <- select(training1, c(-kurtosis_yaw_belt, -skewness_yaw_belt,
+                                  -amplitude_yaw_belt, -kurtosis_yaw_dumbbell,
+                                  -skewness_yaw_dumbbell, -amplitude_yaw_dumbbell,
+                                  -kurtosis_yaw_forearm, -skewness_yaw_forearm,
+                                  -amplitude_yaw_forearm, -user_name,
+                                  -raw_timestamp_part_1, -cvtd_timestamp,
+                                  -raw_timestamp_part_2, -new_window,
+                                  -num_window, -classe))
+
+for(h in 1:144){
+  training_a[,h] <- as.numeric(as.character(training_a[,h]))
+}
+
+preObj <- preProcess(training_a, method = "knnImpute")
+training_impute <- predict(preObj, training_a)
+
+pca_train <- prcomp(training_impute, scale. = TRUE)
+plot(pca_train)
+```
+
+Through iteration and using the validation set, it was determined that the first 25 principal components would give the best predictions and so that is the number of components that were used when finding the best model. A random forest method was used as shown below.
+
+```{r, message=FALSE, warning=FALSE}
+  numComp <- 25
+  maxpc <- paste0("PC", as.character(numComp))
+  train_data_model <- data.frame(Class = training1$classe, pca_train$x)
+  train_data_model <- select(train_data_model, c(Class, PC1:maxpc))
+  
+  modelFit_train <- randomForest(Class~., data = train_data_model)
+```
+
+This model was then used to predict values for the test set. The following is the code used for the validation set so that this work may be reproducible. The in sample error was calculated using the validation set.
+
+```{r, message=FALSE, warning=FALSE}
+  validation_a <- select(validation, c(-kurtosis_yaw_belt, -skewness_yaw_belt,
+                                       -amplitude_yaw_belt, -kurtosis_yaw_dumbbell,
+                                       -skewness_yaw_dumbbell, -amplitude_yaw_dumbbell,
+                                       -kurtosis_yaw_forearm, -skewness_yaw_forearm,
+                                       -amplitude_yaw_forearm, -user_name,
+                                       -raw_timestamp_part_1, -cvtd_timestamp,
+                                       -raw_timestamp_part_2, -new_window,
+                                       -num_window, -classe))
+  
+  for(m in 1:144){
+    validation_a[,m] <- as.numeric(as.character(validation_a[,m]))
+  }
+  
+  val_impute <- predict(preObj, validation_a)
+  val_data <- predict(pca_train, val_impute)
+  val_data <- as.data.frame(val_data)
+  val_data <- val_data[,1:numComp]
+  val_prediction <- predict(modelFit_train, val_data)
+  total_val <- data.frame(Prediction = val_prediction, Actual = validation$classe)
+  total_val <- mutate(total_val, Match = Prediction == Actual)
+  ISE <- 1 - mean(total_val$Match)
+  ISE
+```
+
+## Results
+
+The same method that was used to process the training/validation sets were also used to process the testing set. This set was then used to calculate the out of sample error.
+
+```{r, message=FALSE, warning=FALSE}
+  testing_a <- select(testing, c(-kurtosis_yaw_belt, -skewness_yaw_belt,
+                                 -amplitude_yaw_belt, -kurtosis_yaw_dumbbell,
+                                 -skewness_yaw_dumbbell, -amplitude_yaw_dumbbell,
+                                 -kurtosis_yaw_forearm, -skewness_yaw_forearm,
+                                 -amplitude_yaw_forearm, -user_name,
+                                 -raw_timestamp_part_1, -cvtd_timestamp,
+                                 -raw_timestamp_part_2, -new_window,
+                                 -num_window, -classe))
+  
+  for(k in 1:144){
+    testing_a[,k] <- as.numeric(as.character(testing_a[,k]))
+  }
+  
+  testing_impute <- predict(preObj, testing_a)
+  test_data <- predict(pca_train, testing_impute)
+  test_data <- as.data.frame(test_data)
+  test_data <- test_data[,1:numComp]
+  
+  test_prediction <- predict(modelFit_train, test_data)
+  total_test <- data.frame(Prediction = test_prediction, Actual = testing$classe)
+  total_test <- mutate(total_test, Match = Prediction == Actual)
+  OSE <- 1 - mean(total_test$Match)
+  OSE
+```
+
+
+## Conclusion
+
+It can be seen from the out of sample error of 6.8% that a relatively accurate prediction method has been found. Although it could probably be made more accurate by incorporating another method, this is where I will have to stop.
